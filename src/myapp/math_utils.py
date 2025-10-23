@@ -4,3 +4,5 @@ def safe_div(a: float, b: float) -> float:
     return a / b
 
 # trigger AI testgen
+
+# trigger workflow
