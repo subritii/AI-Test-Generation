@@ -20,9 +20,12 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest jinja2 black ruff
+          pip install pytest jinja2 black ruff openai
 
-      - name: Generate tests from repo context (stubbed)
+      - name: Generate tests from repo context (AI)
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}   
+          LLM_MODEL: gpt-4o-mini
         run: |
           python tools/ai-tests/generate_tests.py
 
@@ -34,4 +37,3 @@ jobs:
       - name: Run tests
         run: |
           pytest -q
-
