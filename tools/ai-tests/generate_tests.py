@@ -29,31 +29,36 @@ plan = {
   ]
 }
 
-# --- render pytest from a small template ---
-TEMPLATE = Template("""\
+
+from jinja2 import Environment, StrictUndefined
+
+env = Environment(undefined=StrictUndefined)
+env.filters["py"] = lambda v: repr(v)  # render as valid Python literal
+
+PYTEST_TEMPLATE = env.from_string("""\
 {% for imp in test.imports %}{{ imp }}
 {% endfor %}
 
-{% if test.parametrized -%}
+import pytest
+
 @pytest.mark.parametrize("args,kwargs,expect", [
 {%- for p in test.parametrized.params -%}
-    ({{ p.get("args", []) }}, {{ p.get("kwargs", {}) }}, {{ p.get("expect") }}),
+    ({{ p.get("args", []) | py }}, {{ p.get("kwargs", {}) | py }}, {{ p.get("expect") | py }}),
 {%- endfor -%}
 ])
 def {{ test.parametrized.name }}(args, kwargs, expect):
     from myapp.math_utils import {{ test.parametrized.target }}
-    import pytest
     if isinstance(expect, str) and expect.startswith("raises:"):
-        exc = getattr(__import__('builtins'), expect.split(":")[1])
+        exc = getattr(__import__('builtins'), expect.split(":",1)[1])
         with pytest.raises(exc):
             {{ test.parametrized.target }}(*args, **kwargs)
     else:
         assert {{ test.parametrized.target }}(*args, **kwargs) == expect
-{%- endif %}
 """)
+
 
 out_file = pathlib.Path(plan["tests"][0]["file_path"])
 out_file.parent.mkdir(parents=True, exist_ok=True)
-out_file.write_text(TEMPLATE.render(test=plan["tests"][0]), encoding="utf-8")
+out_file.write_text(PYTEST_TEMPLATE.render(test=plan["tests"][0]), encoding="utf-8")
 
 print("Generated:", out_file)
