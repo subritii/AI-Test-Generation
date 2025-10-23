@@ -12,6 +12,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed so diff-cover can see base branch history
 
       - uses: actions/setup-python@v5
         with:
@@ -20,11 +22,11 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest jinja2 black ruff openai
+          pip install pytest jinja2 black ruff openai pytest-cov diff-cover
 
       - name: Generate tests from repo context (AI)
         env:
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}   
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: gpt-4o-mini
         run: |
           python tools/ai-tests/generate_tests.py
@@ -34,6 +36,69 @@ jobs:
           black . -q
           ruff . || true
 
-      - name: Run tests
+      - name: Run tests with coverage (XML)
         run: |
-          pytest -q
+          pytest -q --cov=src --cov-report=xml
+
+      - name: Create coverage summary (overall)
+        id: covsum
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rate = ET.parse('coverage.xml').getroot().attrib.get('line-rate', '0')
+          pct = round(float(rate) * 100, 2)
+          print(f"OVERALL_COVERAGE={pct}")
+          with open('coverage_overall.txt','w') as f:
+              f.write(str(pct))
+          PY
+
+      - name: Compute diff coverage for this PR
+        id: diffcov
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          # Ensure we have the base branch
+          git fetch origin $BASE --depth=1
+          # Create a markdown report for changed lines
+          diff-cover coverage.xml --compare-branch=origin/$BASE --markdown-report diff_coverage.md || true
+          # Extract the percentage as a single number ( fallback "N/A" )
+          python - <<'PY'
+          import re, pathlib
+          p = pathlib.Path('diff_coverage.md')
+          pct = "N/A"
+          if p.exists():
+              m = re.search(r'(\d+(?:\.\d+)?)%', p.read_text())
+              if m: pct = m.group(1)
+          print(f"DIFF_COVERAGE={pct}")
+          with open('coverage_diff.txt','w') as f:
+              f.write(str(pct))
+          PY
+
+      - name: Post PR comment with coverage
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const overall = fs.readFileSync('coverage_overall.txt','utf8').trim();
+            let diffPct = 'N/A';
+            if (fs.existsSync('coverage_diff.txt')) diffPct = fs.readFileSync('coverage_diff.txt','utf8').trim();
+            let diffMd = '';
+            if (fs.existsSync('diff_coverage.md')) diffMd = fs.readFileSync('diff_coverage.md','utf8');
+
+            const body = `
+            ### ✅ Test & Coverage Report
+            - **Overall coverage:** ${overall}%  
+            - **Diff coverage (changed lines in this PR):** ${diffPct}%
+
+            <details><summary>Diff coverage details</summary>
+
+            ${diffMd || '_No diff coverage report available_'}
+            </details>
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
